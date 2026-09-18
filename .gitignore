@@ -1,0 +1,6 @@
+# never commit pulled candidate data (PII)
+*_pipeline.json
+*_pipeline.csv
+*_cvs/
+reject_ids.txt
+*.DS_Store
