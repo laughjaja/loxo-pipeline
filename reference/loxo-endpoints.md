@@ -22,9 +22,17 @@ the documented Loxo REST base + your API key.
 
 Notes:
 - The candidates list can be large — land it on disk; don't inline it.
-- The candidates list includes `workflow_stage_id` per candidate and a `person`
-  object with `emails`, `phones`, `linkedin_url`, `current_title`,
-  `current_company`, `city`, `state`, `location`.
+- **Stage field depends on transport.** The **API/MCP** candidates list returns
+  `workflow_stage_id` per candidate. The **browser** `candidates.json` does NOT
+  (it returns `applied_at`, `rejected_at`, `applicant`, `latest_person_event`,
+  `current_stage_agent_type_key`, but no `workflow_stage_id`). On the browser
+  transport, derive stage from the candidate's latest job-scoped
+  "Moved to <Stage>" event (see `scripts/pull_pipeline.mjs` `deriveStageId`),
+  falling back to `applied_at` → Applied.
+- Either way the `person` object carries `emails`, `phones`, `linkedin_url`,
+  `current_title`, `current_company`, `city`, `state`, `location`.
+- `applied_at` (browser transport) is the simplest applied-vs-sourced signal;
+  on the API transport, look for an `applied` activity event on the job instead.
 - `resumes.json` returns an array; each item has `id`, `name`, and usually
   `extracted_text` (the parsed resume-tab text). If `extracted_text` is null,
   fetch the single-resume path for it.

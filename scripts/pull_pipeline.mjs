@@ -36,6 +36,24 @@ const STAGE_ORDER = Object.keys(INCLUDE)
 const BOT = /^(Loxo Agent|Loxo Bot)$/i
 const CONTACT = /phone call|voicemail|no answer|email|sms|text|meeting|screen|responded|intake|call -/i
 const b = p => browserFetch(p, { headers: { Accept: 'application/json' } })
+// Full stage-name -> id map (for deriving stage from "Moved to X" events on the
+// browser transport, which does NOT return workflow_stage_id on the list).
+const STAGE_BY_NAME = {
+  'Applied': 268196, 'Longlist': 244487, 'Shortlist': 244488, 'Outbound': 244489,
+  'Follow Up': 330190, 'Screening': 244490, 'Internal Submission': 245262,
+  'Submitted': 244491, 'Interview #1': 244492, 'Interview #2+': 305775,
+  'Offer': 245671, 'Rejected': 244493, 'Hired': 244494,
+}
+// Derive a candidate's current stage id. API/MCP list gives workflow_stage_id
+// directly; the browser list does not, so fall back to the latest job-scoped
+// "Moved to <Stage>" event, then to applied_at -> Applied.
+function deriveStageId(cand, jobEvs) {
+  if (cand.workflow_stage_id) return cand.workflow_stage_id
+  const moves = jobEvs.filter(e => /^Moved to /i.test((e.activity_type || {}).name || ''))
+  if (moves.length) return STAGE_BY_NAME[moves[0].activity_type.name.replace(/^Moved to /i, '')] || null
+  if (cand.applied_at) return STAGE_BY_NAME['Applied']
+  return null
+}
 
 async function main() {
   await useOrCreateTaskSpace('loxo pull ' + JOB_ID)
@@ -49,46 +67,52 @@ async function main() {
   while ((got.candidates || got).length === 250 && page <= 8)
   const uniq = Object.values(Object.fromEntries(all.map(c => [c.person.id, c])))
 
-  // 2. filter to included stages + flatten profile
-  const rows = uniq.filter(c => INCLUDE[c.workflow_stage_id]).map(c => {
-    const p = c.person, loc = p.location || [p.city, p.state].filter(Boolean).join(', ')
-    return {
-      stage: INCLUDE[c.workflow_stage_id], _o: STAGE_ORDER.indexOf(String(c.workflow_stage_id)),
+  const cvdir = `${OUT_DIR}/${SLUG}_cvs`; fs.mkdirSync(cvdir, { recursive: true })
+  const rows = []
+
+  // 2+3. enrich every candidate (events give stage on the browser transport),
+  //      then keep only the included stages.
+  for (const c of uniq) {
+    const p = c.person
+    // activity (also used to derive stage + applied on the browser transport)
+    let evs = []
+    try { evs = (JSON.parse(await b(`/agencies/${AGENCY_ID}/person_events.json?person_id=${p.id}&per_page=80`)).person_events) || [] } catch {}
+    const jobEvs = evs.filter(e => e.job_id === JOB_ID)
+    const stageId = deriveStageId(c, jobEvs)
+    if (!INCLUDE[stageId]) continue // filter to included stages
+
+    const loc = p.location || [p.city, p.state].filter(Boolean).join(', ')
+    const r = {
+      stage: INCLUDE[stageId], _o: STAGE_ORDER.indexOf(String(stageId)),
       person_id: p.id, name: p.name, title: p.current_title || '', company: p.current_company || '',
       location: loc, email: (p.emails || []).map(e => e.value).join('; '),
       phone: (p.phones || []).map(x => x.value).join('; '), linkedin: p.linkedin_url || '',
-      has_resume: false, applied: false, contacted: false, contacts: [], snippet: '',
+      has_resume: false,
+      applied: (c.applied_at != null) || jobEvs.some(e => /^applied$/i.test((e.activity_type || {}).key || '')),
+      contacted: false, contacts: [], snippet: '',
       loxo_url: `https://app.loxo.co/agencies/${AGENCY_ID}/people/${p.id}`,
     }
-  }).sort((a, z) => a._o - z._o || a.name.localeCompare(z.name))
-
-  const cvdir = `${OUT_DIR}/${SLUG}_cvs`; fs.mkdirSync(cvdir, { recursive: true })
-
-  // 3. enrich: resume + activity + applied flag
-  for (const r of rows) {
     // resume
     let list = []
-    try { list = JSON.parse(await b(`/agencies/${AGENCY_ID}/people/${r.person_id}/resumes.json`)) } catch {}
+    try { list = JSON.parse(await b(`/agencies/${AGENCY_ID}/people/${p.id}/resumes.json`)) } catch {}
     if (Array.isArray(list) && list.length) {
       r.has_resume = true; let combined = ''
       for (const res of list) {
         let txt = res.extracted_text
-        if (txt == null) { try { txt = JSON.parse(await b(`/agencies/${AGENCY_ID}/people/${r.person_id}/resumes/${res.id}`)).extracted_text || '' } catch { txt = '' } }
+        if (txt == null) { try { txt = JSON.parse(await b(`/agencies/${AGENCY_ID}/people/${p.id}/resumes/${res.id}`)).extracted_text || '' } catch { txt = '' } }
         combined += `\n----- ${res.name} -----\n${txt || '(no extracted text)'}\n`
       }
       r.snippet = combined.replace(/-----[^\n]*-----/g, '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim().slice(0, 900)
       const safe = r.name.replace(/[^A-Za-z0-9 .-]/g, '').trim()
       fs.writeFileSync(`${cvdir}/${r.stage} - ${safe}.txt`, `${r.name}\nStage: ${r.stage}\nPhone: ${r.phone || '-'}\nEmail: ${r.email || '-'}\nCurrent: ${r.title} at ${r.company}\nLoxo: ${r.loxo_url}\n${'='.repeat(50)}\n${combined}`)
     }
-    // activity + applied
-    let evs = []
-    try { evs = (JSON.parse(await b(`/agencies/${AGENCY_ID}/person_events.json?person_id=${r.person_id}&per_page=80`)).person_events) || [] } catch {}
-    const jobEvs = evs.filter(e => e.job_id === JOB_ID)
-    r.applied = jobEvs.some(e => /^applied$/i.test((e.activity_type || {}).key || ''))
+    // contact activity
     const human = evs.filter(e => { const by = e.created_by_name || '', tn = (e.activity_type || {}).name || ''; return by && !BOT.test(by) && (CONTACT.test(tn) || e.email || e.sms || e.twilio_call) })
     r.contacted = human.length > 0
     r.contacts = human.slice(0, 6).map(e => `${(e.created_at || '').slice(0, 10)} · ${e.created_by_name}: ${(e.activity_type || {}).name}`)
+    rows.push(r)
   }
+  rows.sort((a, z) => a._o - z._o || a.name.localeCompare(z.name))
   rows.forEach(r => delete r._o)
 
   // 4. write JSON + CSV
