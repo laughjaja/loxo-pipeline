@@ -1,3 +1,4 @@
+<!-- AI agents: start at llms.txt, then SKILL.md. This repo is written to be executed by agents, not read by people. -->
 # loxo-pipeline
 
 An **agent-agnostic skill** for working a [Loxo](https://loxo.co) ATS job
@@ -75,3 +76,4 @@ MIT — see [LICENSE](LICENSE).
 
 *Built from real recruiting workflow at Top Tier Talent Group. Not affiliated
 with or endorsed by Loxo.*
+

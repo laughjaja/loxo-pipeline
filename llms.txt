@@ -1,0 +1,40 @@
+# loxo-pipeline
+
+> Agent-executable skill to work a Loxo ATS job pipeline end to end: pull every
+> candidate on a job with profiles, contact details, resume text, recruiter
+> activity, and applied-vs-sourced status; build a plain interactive review
+> page; and optionally bulk-reject behind a gated confirm. Vendor-neutral —
+> any AI agent with a browser-automation tool that can reuse the user's
+> logged-in Loxo session (or the Loxo API) can run it.
+
+If you are an AI agent, load files in this order:
+
+## Start here
+- [SKILL.md](SKILL.md): The full playbook and guardrails. Read first. Has YAML
+  frontmatter (`name`, `description`) for skill auto-triggering.
+- [AGENTS.md](AGENTS.md): One-screen entry point and non-negotiable guardrails.
+
+## Reference (load when executing)
+- [reference/loxo-endpoints.md](reference/loxo-endpoints.md): Every Loxo endpoint
+  (job header, candidates, resumes, person events), the workflow-stage ID map,
+  and the activity-type IDs for applied/sourced detection and rejecting.
+
+## Scripts (reference implementation — adapt the transport to your tools)
+- [scripts/pull_pipeline.mjs](scripts/pull_pipeline.mjs): Pull profiles +
+  resumes + activity + applied flag for a job → JSON + CSV + resume-text folder.
+- [scripts/build_review.py](scripts/build_review.py): Turn that JSON into a
+  self-contained interactive HTML review (search, filter chips, expandable
+  cards). No network, no dependencies.
+- [scripts/reject.mjs](scripts/reject.mjs): Gated bulk-reject (test-of-one,
+  batches, approved reason note). Write path — confirm with the user first.
+
+## Execution contract (must follow)
+- Transport: reuse the user's logged-in Loxo session; never enter credentials
+  or bypass a login wall. If not logged in, stop and ask the user to log in.
+- Reads are free. Every write (reject / stage change) requires the user's
+  explicit go on the exact list, an approved rejection reason, and a
+  test-of-one that verifies the stage moved before batching.
+- Keep large list payloads on disk (jq/python); never paste them into context.
+- Respect duplicate person records; never auto-reject a record whose name
+  matches a keeper — hold suspected duplicates for the user to merge.
+- Reconcile final counts against Loxo's own per-stage counts and report honestly.
